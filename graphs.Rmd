@@ -1,0 +1,306 @@
+`---
+title: ""
+output:
+  html_document:
+    df_print: paged
+---
+
+# Import data
+```{r}
+  d = read.csv('hc.csv')
+  cat("Total patients: ", nrow(d))
+```
+
+
+## Compute cohort stats
+
+```{r}
+get_range = function(d, na.rm=F, version="memima"){
+  if (version=="mimame"){
+    (paste("(",min(d, na.rm=na.rm), "-", max(d, na.rm=na.rm),",",round(mean(d, na.rm=na.rm),2),")", sep=""))
+  } else if (version=="memima") {
+    paste( round(mean(d, na.rm=na.rm),2), " (", min(d, na.rm=na.rm), "-", max(d, na.rm=na.rm), ")", sep="")
+  } else if (version=="iqr") {
+    paste( 
+      round(median(d, na.rm=na.rm),2), 
+      " (",
+      paste(quantile(d, na.rm=T, probs=c(0.25,0.75), names=F), collapse="-"),
+      ")",
+      sep="")
+  } else if (version=="iqrp") {
+    paste( 
+      round(mean(d, na.rm=na.rm),2),
+      "/",
+      round(median(d, na.rm=na.rm),2), 
+      " (",
+      paste(quantile(d, na.rm=T, probs=c(0.25,0.75), names=F), collapse="-"),
+      ")",
+    sep="")
+  }
+}
+
+print_stats = function(d){
+  cat("Age-Median(IQR), in years :", get_range(d$Edad, version="iqr"),"\n")
+  cat("Sex male n(%):", 
+      sum(d$Varones=="1", na.rm=TRUE),
+      "(",round(mean(d$Varones, na.rm=TRUE)*100,2),"%)\n")
+  cat("DeltaDDXCovSimptoms", get_range(d$DeltaDDXCOVSimptomes, version="iqr"),"\n")
+  cat("Ct", get_range(d$Ct, version="iqr"),"\n")
+  cat("---\n")
+  cat("Hypertension arterial:", round(mean(d$HTA, na.rm=TRUE)*100,2),"%\n")
+  cat("Diabetes mellitus:", round(mean(d$Diabetes_mellitus, na.rm=TRUE)*100,2),"%\n")
+  cat("Chronic heart disease:", round(mean(d$Cardiopatía_crónica, na.rm=TRUE)*100,2),"%\n")
+  cat("Chronic lung disease:", round(mean(d$Enfermedad_respiratoria_cronica, na.rm=TRUE)*100,2),"%\n")
+  cat("Hematological malignances:", round(mean(d$Enfermedad_hematológica, na.rm=TRUE)*100,2),"%\n")
+  cat("Chronic liver diseases:", round(mean(d$Hepatopatía_crónica, na.rm=TRUE)*100,2),"%\n")
+  cat("Solid neoplasm:", round(mean(d$NEO_SOLIDA_MALIGNA, na.rm=TRUE)*100,2),"%\n")
+  
+  cat("---\n")
+  cat("Temperatura:", get_range(d$Temp_d0, na.rm=T, version="iqr"),"\n")
+  cat("Respiratory rate:", get_range(d$FR_d0, na.rm=T, version="iqr"),"\n")
+  cat("Oxygen saturation:", get_range(d$SatO2_d0, na.rm=T, version="iqr"),"\n")
+  
+  cat("---\n")
+  cat("Ferritin:", get_range(d$Ferritina_ing, na.rm=T, version="iqr"),"\n")
+  cat("C-RP:", get_range(d$PCR_ing, na.rm=T, version="iqr"),"\n")
+  cat("D-dimer:", get_range(d$Dimerod_ing, na.rm=T, version="iqr"),"\n")
+  cat("LDH:", get_range(d$LDH_ing, na.rm=T, version="iqr"),"\n")
+  cat("Lymphocyte count:", get_range(d$Linfocitos_ing, na.rm=F, version="iqr"),"\n")
+  
+  cat("---\n")
+  cat("Ct at Covid19 ddx:", get_range(d$Ct, na.rm=F, version="iqr"), "\n")
+  cat("<=20:", round(mean(d$Ct<=20,)*100,2),"%\n")
+  cat("21-25:", round(mean(d$Ct>20 & d$Ct<25,)*100,2),"%\n")
+  cat("<=20:", round(mean(d$Ct>=25,)*100,2),"%\n")
+  
+  cat("---\n")
+  cat("DDXCovSimptomes", get_range(d$DeltaDDXCOVSimptomes, version="iqr"), "\n")
+  cat("UCI admission:", round(mean(d$UCI=="1",)*100,2),"%\n")
+  cat("60-days mortality:", round(mean(d$MORT_60d=="1",)*100,2),"%\n")
+}
+
+print_stats(d)
+
+```
+
+
+```{r}
+# Load cluster information (computed in Python code)
+hc_clusters = read.csv('hc_w_cluster.csv')
+d$cluster = hc_clusters$cluster
+```
+
+
+# Graphs
+```{r}
+library(plotly)
+fvpal = c("#E07871","#AC991A","#1AAF47","#1AB3B7","#6897E6")# ,"#De6AD0")
+```
+
+
+```{r, width=600, height=1000}
+fg3d = plot_ly(
+             x=d$DeltaDDXCOVSimptomes, y=d$Ct, z=d$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(symbol = 'circle', size = 2), 
+             color=as.character(d$cluster),
+             colors=fvpal
+             ) %>%
+  layout(
+    scene=list(
+      xaxis=list(title='pre-test duration of symptoms', range=list(0,20)),
+      yaxis=list(title='Ct of PCR at diagnosis', range=list(0,35)),
+      zaxis=list(title='Lymphocites', range=list(0,2.5)),
+      colorway=fvpal
+    ),
+    legend=list(itemsizing='constant'),
+    colorway=fvpal
+  )
+
+fg3d
+```
+
+
+## PCA (Principal component Analysis)
+
+```{r}
+library(factoextra)
+
+dkmeans = select(d, Ct, DeltaDDXCOVSimptomes, Linfocitos_ing)
+res.pca = prcomp(dkmeans, scale=TRUE)
+res.var = get_pca_var(res.pca)
+
+cluster_info = list(data = dkmeans, cluster = d$cluster)
+fviz_cluster(cluster_info, data=dkmeans, geom=c("point"), axes = c(1,2), palette=fvpal)
+```
+
+
+
+# Death patients blob
+
+```{r}
+options(rgl.useNULL=TRUE) # Set to TRUE for knit
+library(rgl)
+library(ks)
+library(misc3d)
+```
+
+```{r}
+gd = filter(d, MORT_60d=="1")
+plot3d(x=gd$DeltaDDXCOVSimptomes, y=gd$Ct, z=gd$Linfocitos_ing, 
+       xlab="", ylab="", zlab="",
+       xlim=c(0,20), ylim=c(0,37), zlim=c(0,2.5))
+
+gd.dens3d <- kde(x=gd[,c("DeltaDDXCOVSimptomes", "Ct", "Linfocitos_ing")], gridsize=c(64,64,64), compute.cont=T) # This will be added to the next one
+```
+
+```{r}
+gd.dens3d <- kde(x=gd[,c("DeltaDDXCOVSimptomes", "Ct", "Linfocitos_ing")], gridsize=c(64,64,64), compute.cont=T)
+```
+
+```{r}
+x.latt <- gd.dens3d$eval.points[[1]]
+y.latt <- gd.dens3d$eval.points[[2]]
+z.latt <- gd.dens3d$eval.points[[3]]
+```
+
+```{r}
+qcols <- c("red", "red4")
+qalpha <- c(0.2, 0.75)
+qlevels <- gd.dens3d$cont[c(75,25)] # quartiles
+```
+
+```{r}
+contour3d(x=x.latt,y=y.latt,z=z.latt,f=gd.dens3d$estimate,
+           color=qcols, level=qlevels, add=TRUE, alpha=qalpha,
+          xlim=c(0,20), ylim=c(0,37), zlim=c(0,2.5))
+```
+
+
+
+## Dead patients per cluster plots
+```{r}
+op=1
+d$size = 2
+d$type = d$MORT_60d + d$Remdesivir*2
+
+d$color[d$type==0] = "rgba(126,0,0,1)"
+d$color[d$type==1] = "rgba(255,0,0,1)"
+d$color[d$type==2] = "rgba(0,150,0,1)"
+d$color[d$type==3] = "rgba(0,255,0,1)"
+d$size[d$type==3] = 4
+
+d1 = filter(d, d$cluster==1)
+fig1 = plot_ly(
+             x=d1$DeltaDDXCOVSimptomes, y=d1$Ct, z=d1$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(color=d1$color, symbol = 'circle', size = d1$size, opacity=op, line = list(width=0)), 
+             scene='scene1'
+             ) 
+
+d2 = filter(d, d$cluster==2)
+fig2 = plot_ly(
+             x=d2$DeltaDDXCOVSimptomes, y=d2$Ct, z=d2$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(color=d2$color, symbol = 'circle', size =d2$size, opacity=op, line = list(width=0)), 
+             scene='scene2'
+             ) 
+
+d3 = filter(d, d$cluster==3)
+fig3 = plot_ly(
+             x=d3$DeltaDDXCOVSimptomes, y=d3$Ct, z=d3$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(color=d3$color, symbol = 'circle', size = d3$size, opacity=op, line = list(width=0)), 
+             scene = 'scene3'
+             ) 
+
+d4 = filter(d, d$cluster==4)
+fig4 = plot_ly(
+             x=d4$DeltaDDXCOVSimptomes, y=d4$Ct, z=d4$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(color=d4$color, symbol = 'circle', size = d4$size, opacity=op, line = list(width=0)), 
+             scene = 'scene4'
+             ) 
+
+d5 = filter(d, d$cluster==5)
+fig5 = plot_ly(
+             x=d5$DeltaDDXCOVSimptomes, y=d5$Ct, z=d5$Linfocitos_ing,
+             type="scatter3d",
+             mode="markers",
+             marker = list(color=d5$color, symbol = 'circle', size = d5$size, opacity=op, line = list(width=0)), 
+             scene = 'scene5'
+             ) 
+
+
+cl = 100
+axx <- list(
+  title='d',
+  gridcolor='rgb(cl, cl, cl)',
+  range=c(0,20)
+)
+axy <- list(
+  title='Ct',
+  gridcolor='rgb(cl, cl, cl)',
+  zerolinecolor='rgb(0, 0, 0)',
+  range=c(0,37)
+)
+axz <- list(
+  title='L',
+  gridcolor='rgb(cl, cl, cl)',
+  zerolinecolor='rgb(0, 0, 0)',
+  range=c(0,2.5)
+)
+
+figg = subplot(fig1, fig2, fig3, fig4, fig5, fig5)
+figg <- figg %>% layout(title = "3D Subplots", autosize=F,
+                        
+
+scene = list(domain=list(x=c(0,0.33),y=c(0.5,1)),
+              xaxis=axx, yaxis=axy, zaxis=axz,
+              aspectmode='cube'),
+
+  scene2 = list(domain=list(x=c(0.33,0.66),y=c(0.5,1)),
+               xaxis=axx, yaxis=axy, zaxis=axz,
+               aspectmode='cube'),
+  
+  scene3 = list(domain=list(x=c(0.66,1),y=c(0.5,1)),
+               xaxis=axx, yaxis=axy, zaxis=axz,
+               aspectmode='cube'),
+  
+  scene4 = list(domain=list(x=c(0,0.33),y=c(0,0.5)),
+               xaxis=axx, yaxis=axy, zaxis=axz,
+               aspectmode='cube'),
+  
+  scene5 = list(domain=list(x=c(0.33,0.66),y=c(0,0.5)),
+               xaxis=axx, yaxis=axy, zaxis=axz,
+               aspectmode='cube'),
+  
+  scene6 = list(domain=list(x=c(0.66,1),y=c(0,0.5)),
+               xaxis=axx, yaxis=axy, zaxis=axz,
+               aspectmode='cube')
+)
+
+figg = figg %>%
+  style(hoverinfo = 'none', showlegend=F)
+```
+
+```{r}
+# This will look good in Knit
+  layout(figg, height=800, width=1200)
+```
+
+## Legend
+
+Legend for the previous plot
+
+```{r}
+plot.new()
+legend("right", c("No Remdesivir - Survived", "No Remdesivir - Dead (60-days)", "Remdesivir - Survived", "Remdesivir - Dead (60-days)"),
+       pch=19,
+       col=c(rgb(126/255,0,0), rgb(255/255,0,0), rgb(0,150/255,0), rgb(0,255/255,0)))
+```
